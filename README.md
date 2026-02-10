@@ -6,16 +6,16 @@ A privacy-preserving vision-language system that captures your screen, encodes i
 
 ```
 Edge Client (privacy boundary)              Server
-┌─────────────────────────┐    HTTP/JSON   ┌────────────────────────────┐
+┌─────────────────────────┐    HTTP/JSON  ┌────────────────────────────┐
 │ Screen Capture (mss)    │               │ FastAPI                    │
-│        ↓                │               │   ↓                       │
-│ CLIP ViT-L/14-336       │  (576,1024)   │ PyTorch Projector (40 MB) │
-│ (HuggingFace, MPS)      │ ────────────► │   ↓ (576,4096)            │
-│        ↓                │  float16 b64  │ ctypes embedding inject   │
-│ (576,1024) float16 emb  │               │   ↓                       │
-│                         │ ◄──────────── │ Vicuna-7B GGUF (4 GB Q4)  │
-│ Privacy: only abstract  │  description  │   ↓                       │
-│ vectors leave device    │               │ SQLite DB                 │
+│        ↓                │               │   ↓                        │
+│ CLIP ViT-L/14-336       │  (576,1024)   │ PyTorch Projector (40 MB)  │
+│ (HuggingFace, MPS)      │ ────────────► │   ↓ (576,4096)             │
+│        ↓                │  float16 b64  │ ctypes embedding inject    │
+│ (576,1024) float16 emb  │               │   ↓                        │
+│                         │ ◄──────────── │ Vicuna-7B GGUF (4 GB Q4)   │
+│ Privacy: only abstract  │  description  │   ↓                        │
+│ vectors leave device    │               │ SQLite DB                  │
 └─────────────────────────┘               └────────────────────────────┘
 ```
 
