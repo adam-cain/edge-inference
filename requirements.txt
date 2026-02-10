@@ -1,0 +1,26 @@
+# =============================================================================
+# Edge Inference VLM - Python Dependencies
+# =============================================================================
+# Edge client: torch + transformers (CLIP vision tower), mss (screen capture)
+# Server: torch (projector only, ~33 MB), llama-cpp-python (GGUF LLM, ~4 GB)
+# =============================================================================
+
+# -- Core ML --
+torch
+transformers
+numpy
+
+# -- Server (LLM inference via llama.cpp) --
+llama-cpp-python
+fastapi
+uvicorn[standard]
+
+# -- Edge (screen capture + HTTP client) --
+mss
+Pillow
+requests
+
+# -- Shared --
+pydantic
+huggingface-hub
+accelerate

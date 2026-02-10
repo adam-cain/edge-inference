@@ -1,0 +1,56 @@
+# =============================================================================
+# Edge Inference VLM - Git Ignore
+# =============================================================================
+
+# -- Python --
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+
+# -- Virtual environment --
+venv/
+.venv/
+env/
+
+# -- Model files (large binaries, downloaded separately) --
+models/*.gguf
+models/*.pt
+models/*.bin
+models/*.safetensors
+models/.cache/
+
+# -- Keep the projector config (94 bytes, needed for rebuild) --
+!models/projector_config.json
+
+# -- Runtime artifacts --
+*.db
+*.db-shm
+*.db-wal
+
+# -- Environment / secrets --
+.env
+.env.*
+
+# -- IDE / editor --
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# -- Jupyter --
+.ipynb_checkpoints/
+
+# -- Testing / coverage --
+.pytest_cache/
+.coverage
+htmlcov/
+
+# -- OS --
+Thumbs.db
