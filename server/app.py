@@ -2,8 +2,9 @@
 # Edge Inference VLM - FastAPI Server Application
 # =============================================================================
 # Defines the HTTP API endpoints for receiving CLIP vision embeddings from
-# the edge client, projecting them through the LLaVA projector, running
-# LLM inference via llama.cpp, storing descriptions, and serving results.
+# the edge client, projecting them through the LLaVA-NeXT projector, packing
+# AnyRes tile features, running LLM inference via llama.cpp, storing
+# descriptions, and serving results.
 # =============================================================================
 
 import base64
@@ -39,8 +40,8 @@ async def lifespan(app: FastAPI):
     Application lifespan handler — initializes and tears down resources.
 
     On startup:
-        - Loads the PyTorch vision projector (~33 MB).
-        - Loads the GGUF quantized LLM via llama.cpp (~4 GB).
+        - Loads the PyTorch vision projector (~33 MB) with image_newline.
+        - Loads the GGUF quantized LLM via llama.cpp (~6 GB Q6_K).
         - Opens the SQLite database connection.
 
     On shutdown:
@@ -56,6 +57,7 @@ async def lifespan(app: FastAPI):
         model_path=config.llm_model_path,
         projector_weights_path=config.projector_weights_path,
         projector_config_path=config.projector_config_path,
+        image_newline_path=config.image_newline_path,
         device=config.device,
         n_ctx=config.n_ctx,
         n_gpu_layers=config.n_gpu_layers,
@@ -80,10 +82,11 @@ app = FastAPI(
     title="Edge Inference VLM Server",
     description=(
         "Receives CLIP vision embeddings from edge clients, projects them "
-        "through the LLaVA projector, generates screen descriptions via "
-        "llama.cpp, and stores results in SQLite."
+        "through the LLaVA-NeXT projector, packs AnyRes tile features, "
+        "generates screen descriptions via llama.cpp (Mistral-7B Q6_K), "
+        "and stores results in SQLite."
     ),
-    version="0.3.0",
+    version="0.4.0",
     lifespan=lifespan,
 )
 
@@ -135,11 +138,12 @@ def receive_embedding(payload: EmbeddingPayload):
     Receive CLIP embeddings and generate a screen description.
 
     Decodes the base64-encoded embedding, projects it into the LLM space,
-    injects into the llama.cpp KV cache, generates text, and stores the
-    result in the database.
+    packs AnyRes tile features (when tile_grid is provided), injects into
+    the llama.cpp KV cache, generates text, and stores the result.
 
     Args:
-        payload: EmbeddingPayload with frame_id, timestamp, and embedding data.
+        payload: EmbeddingPayload with frame_id, timestamp, embedding data,
+                 and optional tile_grid for AnyRes layout.
 
     Returns:
         DescriptionResponse with the generated description and timing info.
@@ -147,20 +151,24 @@ def receive_embedding(payload: EmbeddingPayload):
     if _llm is None or not _llm.is_ready:
         raise HTTPException(status_code=503, detail="Model not loaded yet")
 
-    # Decode base64 embedding → numpy array
+    # Decode base64 embedding -> numpy array
     clip_embeddings = _decode_embedding(payload)
 
-    # Run inference (project + inject + generate) and measure time
+    # Extract AnyRes tile grid metadata (None for legacy single-crop payloads)
+    tile_grid = tuple(payload.tile_grid) if payload.tile_grid else None
+
+    # Run inference (project + pack + inject + generate) and measure time
     inference_start = time.time()
-    description = _llm.generate_description(clip_embeddings)
+    description = _llm.generate_description(clip_embeddings, tile_grid=tile_grid)
     processing_time_ms = (time.time() - inference_start) * 1000.0
 
     logger.info(
-        "Frame %s → description (%.1fms, emb=%s): %s...",
+        "Frame %s -> description (%.1fms, emb=%s, grid=%s):\n%s",
         payload.frame_id,
         processing_time_ms,
         payload.embedding_shape,
-        description[:60],
+        tile_grid,
+        description,
     )
 
     # Store in database

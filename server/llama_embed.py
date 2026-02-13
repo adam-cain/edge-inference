@@ -2,12 +2,16 @@
 # Edge Inference VLM - llama.cpp Embedding Injection
 # =============================================================================
 # Provides functions to inject pre-computed float32 embeddings directly into
-# llama.cpp's KV cache via the C-level llama_batch API. This bridges the
+# llama.cpp's KV cache via the C-level llama_batch API.  This bridges the
 # PyTorch projector output with the GGUF quantized LLM.
 #
-# The standard Python Llama.eval() only accepts token IDs. This module uses
+# The standard Python Llama.eval() only accepts token IDs.  This module uses
 # ctypes to create a llama_batch with the 'embd' field set (float embeddings)
 # instead of 'token' (integer IDs), then calls llama_decode directly.
+#
+# For LLaVA-NeXT the embedding sequence can be up to ~2,928 tokens (2x2 grid)
+# instead of the 576 tokens used by LLaVA v1.5.  The chunked injection in
+# eval_embeddings() handles arbitrarily long sequences.
 # =============================================================================
 
 import ctypes
@@ -35,7 +39,8 @@ def eval_embeddings(
     Args:
         model:      The llama_cpp.Llama instance (already loaded).
         embeddings: numpy array of shape (n_tokens, n_embd) with dtype float32.
-                    Typically (576, 4096) for LLaVA image features.
+                    For LLaVA-NeXT this can be up to ~2,928 tokens of packed
+                    image features (overview + tiles + newlines).
         n_past:     Current position in the KV cache (number of tokens
                     already evaluated).
 
@@ -109,13 +114,50 @@ def eval_embeddings(
     return n_past + total_tokens
 
 
+def _trim_to_last_sentence(text: str) -> str:
+    """
+    Trim generated text to the last complete sentence if cut off mid-sentence.
+
+    If the text does not end with terminal punctuation (.!?:") or a closing
+    bracket/paren), attempts to find the last sentence boundary and truncates
+    there.  Falls back to the original text if no good boundary is found.
+
+    Args:
+        text: The raw generated text (already stripped).
+
+    Returns:
+        The text trimmed to a complete sentence, or unchanged if already complete.
+    """
+    if not text:
+        return text
+
+    # Characters that indicate a complete sentence
+    terminal_chars = set('.!?:"\')]\n')
+    if text[-1] in terminal_chars:
+        return text
+
+    # Try to find the last sentence-ending period followed by a space or newline
+    # Only trim if we'd keep at least half the text (avoid over-trimming)
+    min_keep = len(text) // 2
+
+    for sep in [". ", ".\n", "! ", "!\n", "? ", "?\n"]:
+        last_idx = text.rfind(sep)
+        if last_idx > min_keep:
+            return text[: last_idx + 1]
+
+    # No good sentence boundary found — return as-is
+    return text
+
+
 def generate_with_embeddings(
     model: "llama_cpp.Llama",
     tokens_before: List[int],
     projected_embeddings: np.ndarray,
     tokens_after: List[int],
-    max_tokens: int = 256,
-    temperature: float = 0.0,
+    max_tokens: int = 1024,
+    temperature: float = 0.1,
+    repeat_penalty: float = 1.1,
+    top_p: float = 0.9,
 ) -> str:
     """
     Generate text from a prompt that includes injected image embeddings.
@@ -129,13 +171,17 @@ def generate_with_embeddings(
     Args:
         model:                The llama_cpp.Llama instance.
         tokens_before:        Token IDs for the text before <image>.
-        projected_embeddings: numpy (n_patches, n_embd) float32 from the projector.
+        projected_embeddings: numpy (n_tokens, n_embd) float32 from the projector.
+                              For LLaVA-NeXT this is the packed sequence from
+                              pack_image_features() (up to ~2,928 tokens).
         tokens_after:         Token IDs for the text after <image>.
         max_tokens:           Maximum number of tokens to generate.
-        temperature:          Sampling temperature (0.0 = greedy).
+        temperature:          Sampling temperature (0.0 = greedy, 0.1 = focused).
+        repeat_penalty:       Penalty for repeated tokens (1.0 = none, 1.1 = mild).
+        top_p:                Nucleus sampling threshold (0.9 = cut bottom 10%).
 
     Returns:
-        The generated text string.
+        The generated text string, trimmed to the last complete sentence.
     """
     # Reset the model state (clear KV cache, reset token counter)
     model.reset()
@@ -164,15 +210,20 @@ def generate_with_embeddings(
     # need to match what's cached so llama.cpp doesn't re-evaluate them.
     prompt_tokens = model.input_ids[: model.n_tokens].tolist()
 
-    # Run autoregressive generation
+    # Run autoregressive generation with tuned sampling parameters
     completion = model.create_completion(
         prompt=prompt_tokens,
         max_tokens=max_tokens,
         temperature=temperature,
-        stop=["</s>", "USER:"],
+        repeat_penalty=repeat_penalty,
+        top_p=top_p,
+        stop=["</s>", "[INST]"],
     )
 
     generated_text = completion["choices"][0]["text"].strip()
+
+    # Post-processing: trim to last complete sentence if generation was cut off
+    generated_text = _trim_to_last_sentence(generated_text)
 
     logger.debug(
         "Generated %d chars: %s...",

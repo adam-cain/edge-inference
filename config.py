@@ -2,8 +2,11 @@
 # Edge Inference VLM - Centralized Configuration
 # =============================================================================
 # Provides a single Config dataclass containing all tunable parameters for
-# both the edge client and server. Parameters are overridable via environment
+# both the edge client and server.  Parameters are overridable via environment
 # variables with the EDGE_ prefix (e.g., EDGE_CAPTURE_INTERVAL_SECONDS=2.0).
+#
+# LLaVA-NeXT v1.6 (Mistral-7B) defaults are configured for AnyRes multi-tile
+# vision encoding with a Q6_K quantized LLM on Apple Silicon (M-series).
 # =============================================================================
 
 import os
@@ -61,6 +64,11 @@ class Config:
     capture_interval_seconds: float = 1.0
     capture_monitor: int = 1
 
+    # -- Change Detection --
+    # Minimum mean pixel difference (0.0–1.0) to consider a frame "changed".
+    # Frames below this threshold are skipped to save inference cycles.
+    change_detection_threshold: float = 0.02
+
     # -- Networking --
     server_host: str = "127.0.0.1"
     server_port: int = 8000
@@ -69,6 +77,11 @@ class Config:
     vision_model_id: str = "openai/clip-vit-large-patch14-336"
     vision_feature_layer: int = -2  # Penultimate hidden layer
 
+    # -- AnyRes Tiling (LLaVA-NeXT) --
+    # JSON-encoded list of [height, width] grid pinpoints.  The best-fit grid
+    # is selected per-frame based on the screenshot aspect ratio.
+    image_grid_pinpoints: str = "[[336,672],[672,336],[672,672],[1008,336],[336,1008]]"
+
     # -- Server Projector (PyTorch, ~33 MB) --
     projector_weights_path: str = field(
         default_factory=lambda: os.path.join(_PROJECT_ROOT, "models", "projector_fp16.pt")
@@ -76,14 +89,19 @@ class Config:
     projector_config_path: str = field(
         default_factory=lambda: os.path.join(_PROJECT_ROOT, "models", "projector_config.json")
     )
-
-    # -- Server LLM (llama.cpp GGUF, ~4 GB) --
-    llm_model_path: str = field(
-        default_factory=lambda: os.path.join(_PROJECT_ROOT, "models", "ggml-model-q4_k.gguf")
+    image_newline_path: str = field(
+        default_factory=lambda: os.path.join(_PROJECT_ROOT, "models", "image_newline.pt")
     )
-    n_ctx: int = 2048
+
+    # -- Server LLM (llama.cpp GGUF, ~6 GB Q6_K) --
+    llm_model_path: str = field(
+        default_factory=lambda: os.path.join(
+            _PROJECT_ROOT, "models", "llava-v1.6-mistral-7b.Q6_K.gguf"
+        )
+    )
+    n_ctx: int = 4096
     n_gpu_layers: int = -1  # -1 = offload all layers to GPU
-    max_new_tokens: int = 256
+    max_new_tokens: int = 1024
 
     # -- Compute --
     device: str = field(default_factory=_detect_device)
@@ -112,12 +130,15 @@ class Config:
         field_types = {
             "capture_interval_seconds": float,
             "capture_monitor": int,
+            "change_detection_threshold": float,
             "server_host": str,
             "server_port": int,
             "vision_model_id": str,
             "vision_feature_layer": int,
+            "image_grid_pinpoints": str,
             "projector_weights_path": str,
             "projector_config_path": str,
+            "image_newline_path": str,
             "llm_model_path": str,
             "n_ctx": int,
             "n_gpu_layers": int,

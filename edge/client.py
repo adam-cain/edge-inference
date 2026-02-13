@@ -4,11 +4,16 @@
 # Provides the EmbeddingClient class responsible for base64-encoding CLIP
 # vision embeddings and transmitting them to the server via HTTP POST.
 # Only abstract float vectors leave the device — never raw images.
+#
+# With LLaVA-NeXT AnyRes, a single frame produces multiple tile embeddings
+# concatenated into one array.  The optional ``tile_grid`` metadata tells the
+# server how to unpack and arrange them.
 # =============================================================================
 
 import base64
 import logging
 import time
+from typing import List, Optional
 
 import numpy as np
 import requests
@@ -37,18 +42,21 @@ class EmbeddingClient:
         embedding: np.ndarray,
         frame_id: str,
         timestamp: str,
+        tile_grid: Optional[List[int]] = None,
         max_retries: int = 3,
     ) -> dict:
         """
         Send a CLIP embedding to the server for LLM processing.
 
         Encodes the numpy array as base64 bytes and POSTs as JSON
-        to /api/v1/embeddings. Retries on failure with exponential backoff.
+        to /api/v1/embeddings.  Retries on failure with exponential backoff.
 
         Args:
-            embedding:   numpy array of shape (576, 1024) with dtype float16.
+            embedding:   numpy array of shape (N*576, 1024) with dtype float16.
+                         For AnyRes: N = 1 (overview) + grid_rows * grid_cols.
             frame_id:    UUID4 string identifying this frame capture.
             timestamp:   ISO 8601 string of the capture time.
+            tile_grid:   Optional [rows, cols] describing the AnyRes tile layout.
             max_retries: Maximum number of retry attempts on failure.
 
         Returns:
@@ -68,6 +76,10 @@ class EmbeddingClient:
             "embedding_dtype": str(embedding.dtype),
         }
 
+        # Include AnyRes tile grid metadata when present
+        if tile_grid is not None:
+            payload["tile_grid"] = tile_grid
+
         url = f"{self._server_url}/api/v1/embeddings"
         payload_kb = len(embedding_b64) // 1024
         last_exception = None
@@ -79,8 +91,8 @@ class EmbeddingClient:
                 result = response.json()
                 logger.info(
                     "Sent embedding %s → server responded "
-                    "(attempt %d, %d KB payload, shape=%s)",
-                    frame_id, attempt, payload_kb, embedding.shape,
+                    "(attempt %d, %d KB payload, shape=%s, tile_grid=%s)",
+                    frame_id, attempt, payload_kb, embedding.shape, tile_grid,
                 )
                 return result
 
